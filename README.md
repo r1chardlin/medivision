@@ -1,5 +1,5 @@
 # MediVision
-MediVision is a Deep Learning based framework (still in progress) that detects pathologies in chest radiographs.
+MediVision is a deep learning-based framework (still in progress) that detects pathologies in chest radiographs.
 
 # Dataset
 All models are trained, validated, and tested on the ChestX-ray8 dataset:
