@@ -5,10 +5,29 @@ import torch.nn.functional as F
 import torchvision.transforms as transforms
 from torch.utils.data import DataLoader
 
+import random
 from tqdm import tqdm
+
 import global_vars
 from dataset import NIHDataset
 from model import ConvNet
+
+def split_train_val(train_val_file=global_vars.train_val_list_file, train_file=global_vars.train_list_file, 
+                    val_file=global_vars.val_list_file, val_ratio=0.1):
+    train_val_file = open(train_val_file, 'r')
+    imgs = train_val_file.readlines()
+    imgs[-1] += '\n'
+    random.shuffle(imgs)
+    split = int(val_ratio * len(imgs))
+    val_list = imgs[:split]
+    train_list = imgs[split:]
+    with open(val_file, 'w') as f:
+        for img in val_list:
+            f.write(img)
+    with open(train_file, 'w') as f:
+        for img in train_list:
+            f.write(img)
+    train_val_file.close()
 
 def keep_top_k_elements(tensor, k):
     # flatten the tensor and get the top k values and their indices
@@ -74,8 +93,8 @@ def test_classification_model(test_loader, model):
         preds = outputs.data
         # preds = F.softmax(preds)
         preds = F.sigmoid(preds)
-        preds = keep_top_k_elements_per_row(preds, 9)
-        preds = (preds > 0.7).to(torch.float32)
+        # preds = keep_top_k_elements_per_row(preds, 9)
+        preds = (preds > 0.7).to(torch.float32) # apply threshold
         accumulator += (preds == labels).sum().item()
         
         # # for single-label
@@ -93,12 +112,21 @@ def train_and_test_model(batch_size, hidden_channels, num_epochs, lr):
                            img_path=global_vars.img_path, 
                            transform=transform)
     
+    val_set = NIHDataset(csv_file=global_vars.csv_file, 
+                           img_list=global_vars.val_list_file, 
+                           img_path=global_vars.img_path, 
+                           transform=transform)
+    
     test_set = NIHDataset(csv_file=global_vars.csv_file, 
                           img_list=global_vars.test_list_file, 
                           img_path=global_vars.img_path, 
                           transform=transform)
 
     train_loader = DataLoader(dataset=train_set,
+                              batch_size=batch_size,
+                              shuffle=True)
+    
+    val_loader = DataLoader(dataset=val_set,
                               batch_size=batch_size,
                               shuffle=True)
 
@@ -114,6 +142,10 @@ def train_and_test_model(batch_size, hidden_channels, num_epochs, lr):
     conv_model = train_classification_model(train_loader, conv_model, num_epochs=num_epochs, lr=lr)
     torch.save(conv_model, global_vars.model_file)
     
+    avg_train_acc = test_classification_model(train_loader, conv_model)
+    avg_val_acc = test_classification_model(val_loader, conv_model)
     avg_test_acc = test_classification_model(test_loader, conv_model)
 
-    print('avg test accuracy', avg_test_acc)
+    print("train accuracy: ", avg_train_acc)
+    print("validation accuracy:", avg_val_acc)
+    print("test accuracy:", avg_test_acc)

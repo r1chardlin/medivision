@@ -6,11 +6,10 @@ import torch
 from torch.utils.data import Dataset
 import torchvision.transforms as transforms
 
-# TODO: change normalization parameters
 class NIHDataset(Dataset):
     def __init__(self, csv_file, img_list, img_path, transform=transforms.Compose([transforms.Normalize((0.5,), (1.0,))])):
         self.df = pd.read_csv(csv_file)
-        self.data_list = [line[-1] for line in open(img_list)]
+        self.data_list = [line[:-1] for line in open(img_list)]
         self.img_path = img_path
         self.pil_to_tensor = transforms.Compose([transforms.PILToTensor()])
         self.transform = transform
@@ -22,19 +21,15 @@ class NIHDataset(Dataset):
         return len(self.data_list)
     
     def __getitem__(self, idx):
-        # if torch.is_tensor(idx):
-        #     idx = idx.tolist()
-
-        img_name = self.df.iloc[idx]["Image Index"]
+        img_name = self.data_list[idx] # get name of x-ray file
         img_file = os.path.join(self.img_path, img_name)
-        str_labels = self.df.iloc[idx]["Finding Labels"].split('|')
-        # label = self.df.iloc[idx]["Finding Labels"]
+        str_labels = self.df[self.df["Image Index"] == img_name]["Finding Labels"].item().split('|') # get corresponding labels of x-ray
 
+        # create the label tensor
         labels = [0] * 14
         for diagnosis in str_labels:
             if diagnosis != "No Finding":
                 labels[self.label_map[diagnosis]] = 1
-
         labels = torch.tensor(labels, dtype=torch.float32)
 
         # read image from file
@@ -42,10 +37,8 @@ class NIHDataset(Dataset):
         data = self.pil_to_tensor(data)
         data = data.to(torch.float32)
 
+        # apply transformation to image/features
         if self.transform:
             features = self.transform(data)
-
-        # if features.shape[0] > 1:
-        #     print(idx, features.shape, len(label))
         
         return features, labels
