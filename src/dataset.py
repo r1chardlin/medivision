@@ -7,7 +7,7 @@ from torch.utils.data import Dataset
 import torchvision.transforms as transforms
 
 class NIHDataset(Dataset):
-    def __init__(self, csv_file, img_list, img_path, transform=transforms.Compose([transforms.Normalize((0.5,), (1.0,))])):
+    def __init__(self, csv_file, img_list, img_path, transform=None):
         self.df = pd.read_csv(csv_file)
         self.data_list = [line[:-1] for line in open(img_list)]
         self.img_path = img_path
@@ -38,6 +38,7 @@ class NIHDataset(Dataset):
         data = data.to(torch.float32)
 
         # apply transformation to image/features
+        features = data
         if self.transform:
             features = self.transform(data)
         
