@@ -4,8 +4,11 @@ import torch.optim as optim
 import torch.nn.functional as F
 import torchvision.transforms as transforms
 from torch.utils.data import DataLoader
+from sklearn import metrics
 
+import os
 import random
+import numpy as np
 from tqdm import tqdm
 
 import global_vars
@@ -28,6 +31,23 @@ def split_train_val(train_val_file=global_vars.train_val_list_file, train_file=g
         for img in train_list:
             f.write(img)
     train_val_file.close()
+
+def get_mean_and_std(loader):
+    mean = 0.0
+    std = 0.0
+    total_samples = 0
+
+    for images, _ in tqdm(loader):
+        batch_samples = images.size(0) # get number of samples in the current batch
+        images = images.view(batch_samples, images.size(1), -1) # reshape images to (batch_size, channels, height * width)
+        mean += images.mean(2).sum(0) # calculate mean of each image and sum across batches
+        std += images.std(2).sum(0)   # calculate std of each image and sum across batches
+        
+        total_samples += batch_samples
+
+    mean /= total_samples
+    std /= total_samples
+    return mean.item(), std.item()
 
 def keep_top_k_elements(tensor, k):
     # flatten the tensor and get the top k values and their indices
@@ -56,57 +76,7 @@ def keep_top_k_elements_per_row(tensor, k):
     
     return result
 
-def train_classification_model(train_loader, model, num_epochs, lr=1e-1, print_freq=100):
-    optimizer = optim.SGD(model.parameters(), lr=lr)  # create an SGD optimizer for the model parameters
-    for epoch in tqdm(range(num_epochs)):
-
-        # Iterate through the dataloader for each epoch
-        for batch_idx, (imgs, labels) in tqdm(enumerate(train_loader)):
-            # imgs (torch.Tensor):    batch of input images
-            # labels (torch.Tensor):  batch labels corresponding to the inputs
-
-            imgs = imgs.to(global_vars.device)
-            labels = labels.to(global_vars.device)
-            
-            # implement the training loop using imgs, labels, and cross entropy loss
-            optimizer.zero_grad()  
-            pred = model.forward(imgs)  # run the forward pass through the model to compute predictions
-            # print(pred)
-            # print(labels)
-            # loss = F.cross_entropy(pred, labels)
-            loss = F.binary_cross_entropy_with_logits(pred, labels) # need use this instead of F.cross_entropy because labels are tensors
-            loss.backward()  # compute the gradient wrt loss
-            optimizer.step()  # performs a step of gradient descent      
-
-            if (epoch + 1) % print_freq == 0:
-                print('epoch {} loss {}'.format(epoch+1, loss.item()))
-                
-    return model  # return trained model
-
-def test_classification_model(test_loader, model):
-    accumulator = 0
-    total = 0
-    for batch_idx, (imgs, labels) in tqdm(enumerate(test_loader)):
-        imgs = imgs.to(global_vars.device)
-        labels = labels.to(global_vars.device)
-        outputs = model(imgs)
-        preds = outputs.data
-        # preds = F.softmax(preds)
-        preds = F.sigmoid(preds)
-        # preds = keep_top_k_elements_per_row(preds, 9)
-        preds = (preds > 0.7).to(torch.float32) # apply threshold
-        accumulator += (preds == labels).sum().item()
-        
-        # # for single-label
-        # _, preds = torch.max(outputs.data, 1)
-        # accumulator += (preds == labels).sum().item()
-
-        total += labels.size(0) * labels.size(1)
-    return accumulator / total
-
-def train_and_test_model(batch_size, hidden_channels, num_epochs, lr):
-    transform = transforms.Compose([transforms.Normalize((0.5,), (1.0,))])
-
+def get_dataset_loaders(transform=transforms.Compose([transforms.Normalize((global_vars.mean,), (global_vars.std,))])):
     train_set = NIHDataset(csv_file=global_vars.csv_file, 
                            img_list=global_vars.train_list_file, 
                            img_path=global_vars.img_path, 
@@ -123,17 +93,158 @@ def train_and_test_model(batch_size, hidden_channels, num_epochs, lr):
                           transform=transform)
 
     train_loader = DataLoader(dataset=train_set,
-                              batch_size=batch_size,
+                              batch_size=global_vars.batch_size,
                               shuffle=True)
     
     val_loader = DataLoader(dataset=val_set,
-                              batch_size=batch_size,
+                              batch_size=global_vars.batch_size,
                               shuffle=True)
 
     test_loader = DataLoader(dataset=test_set,
-                             batch_size=batch_size,
+                             batch_size=global_vars.batch_size,
                              shuffle=True)
 
+    return train_loader, val_loader, test_loader
+
+def train_classification_model(train_loader, model, num_epochs, lr, print_freq=1):
+    # optimizer = optim.SGD(model.parameters(), lr=lr)  # create an SGD optimizer for the model parameters
+    optimizer = optim.Adam(model.parameters(), lr=lr)
+    pos_weight = torch.tensor(20)
+    for epoch in tqdm(range(num_epochs)):
+        # Iterate through the dataloader for each epoch
+        loss_acc = 0
+        for batch_idx, (imgs, labels) in tqdm(enumerate(train_loader)):
+            # imgs (torch.Tensor):    batch of input images
+            # labels (torch.Tensor):  batch labels corresponding to the inputs
+
+            imgs = imgs.to(global_vars.device)
+            labels = labels.to(global_vars.device)
+            
+            # implement the training loop using imgs, labels, and cross entropy loss
+            optimizer.zero_grad()  
+            pred = model.forward(imgs)  # run the forward pass through the model to compute predictions
+            
+
+            # loss = F.cross_entropy(pred, labels) # for multiclass classification
+            loss = F.binary_cross_entropy_with_logits(pred, labels, pos_weight=pos_weight) # use this instead of F.cross_entropy for multilabel classification
+            loss.backward()  # compute the gradient wrt loss
+            optimizer.step()  # performs a step of gradient descent
+
+            loss_acc += loss.item()      
+
+        if (epoch + 1) % print_freq == 0:
+            print('epoch {} loss {}'.format(epoch+1, loss_acc / global_vars.batch_size))
+                
+    return model  # return trained model
+
+def test_classification_model(data_loader, model, threshold=0.7):
+    accuracy_acc = 0
+    precision_acc = 0
+    recall_acc = 0
+    accuracy_total = 0
+    precision_batch_count = 0
+    recall_batch_count = 0
+    for batch_idx, (imgs, labels) in tqdm(enumerate(data_loader)):
+        imgs = imgs.to(global_vars.device)
+        labels = labels.to(global_vars.device)
+        outputs = model(imgs)
+
+        # # for single-label
+        # _, preds = torch.max(outputs.data, 1)
+        # accumulator += (preds == labels).sum().item()
+
+        preds = outputs.data
+        # preds = F.softmax(preds)
+        preds = F.sigmoid(preds)
+        # preds = keep_top_k_elements_per_row(preds, 9)
+        preds = (preds > threshold).to(torch.float32) # apply threshold
+
+        accuracy_acc += (preds == labels).sum().item()
+        accuracy_total += labels.size(0) * labels.size(1)
+
+        preds = preds.cpu().numpy()
+        labels = labels.cpu().numpy()
+
+        precision = metrics.precision_score(y_true=labels, y_pred=preds, average="samples", zero_division=np.nan)
+        recall = metrics.recall_score(y_true=labels, y_pred=preds, average="samples", zero_division=np.nan)
+        
+        # print()
+        if precision is not np.nan:
+            # print(f"precision: {precision}")
+            precision_acc += precision
+            precision_batch_count += 1
+        if recall is not np.nan:
+            # print(f"recall: {recall}")
+            recall_acc += recall
+            recall_batch_count += 1
+        
+
+        # indices = np.where(preds.sum(axis=1) > 0)
+        # if indices[0].shape[0] > 0:
+        #     precision_acc += metrics.precision_score(y_true=labels[indices], y_pred=preds[indices], average="micro", zero_division=1.0)
+        #     recall_acc += metrics.recall_score(y_true=labels[indices], y_pred=preds[indices], average="micro", zero_division=1.0)
+            
+        #     # print(precision_acc)
+        #     # accuracy_total += labels.size(0) * labels.size(1)
+        #     batch_count += 1
+
+    print(precision_acc, precision_batch_count)
+    print(recall_acc, recall_batch_count)
+        
+    return accuracy_acc / accuracy_total, precision_acc / precision_batch_count, recall_acc / recall_batch_count
+
+def log_test_metrics(model_file, train_loader, val_loader, test_loader, threshold=0.7, log_file=global_vars.metrics_log_file, 
+                     train=True, val=True, test=True, print_flag=True):
+    if not train and not val and not test:
+        return
+    
+    # train_loader, val_loader, test_loader = get_dataset_loaders()
+    model = torch.load(model_file)
+    model_name = model_file.split('/')[-1]
+
+    with open(log_file, 'a') as f:
+        f.write(f"{model_name}, threshold: {threshold}\n\n")
+    
+        if train:
+            train_acc, train_precision, train_recall = test_classification_model(train_loader, model, threshold)
+
+            f.write(f"train accuracy: {train_acc}\n")
+            f.write(f"train precision: {train_precision}\n")
+            f.write(f"train recall: {train_recall}\n\n")
+
+            if print_flag:
+                print(f"train accuracy: {train_acc}")
+                print(f"train precision: {train_precision}")
+                print(f"train recall: {train_recall}\n")
+
+        if val:
+            val_acc, val_precision, val_recall = test_classification_model(val_loader, model, threshold)
+
+            f.write(f"validation accuracy: {val_acc}\n")
+            f.write(f"validation precision: {val_precision}\n")
+            f.write(f"validation recall: {val_recall}\n\n")
+            
+            if print_flag:
+                print(f"validation accuracy: {val_acc}")
+                print(f"validation precision: {val_precision}")
+                print(f"validation recall: {val_recall}\n")
+
+        if test:
+            test_acc, test_precision, test_recall = test_classification_model(test_loader, model, threshold)
+
+            f.write(f"test accuracy: {test_acc}\n")
+            f.write(f"test precision: {test_precision}\n")
+            f.write(f"test recall: {test_recall}\n\n")
+
+            if print_flag:
+                print(f"test accuracy: {test_acc}")
+                print(f"test precision: {test_precision}")
+                print(f"test recall: {test_recall}\n")
+
+        f.write('\n')
+
+def train_and_test_model(hidden_channels, num_epochs, lr, threshold=0.7):
+    train_loader, val_loader, test_loader = get_dataset_loaders()
 
     conv_model = ConvNet(input_channels=1, hidden_channels=hidden_channels)
     conv_model = conv_model.to(global_vars.device)
@@ -142,10 +253,4 @@ def train_and_test_model(batch_size, hidden_channels, num_epochs, lr):
     conv_model = train_classification_model(train_loader, conv_model, num_epochs=num_epochs, lr=lr)
     torch.save(conv_model, global_vars.model_file)
     
-    avg_train_acc = test_classification_model(train_loader, conv_model)
-    avg_val_acc = test_classification_model(val_loader, conv_model)
-    avg_test_acc = test_classification_model(test_loader, conv_model)
-
-    print("train accuracy: ", avg_train_acc)
-    print("validation accuracy:", avg_val_acc)
-    print("test accuracy:", avg_test_acc)
+    log_test_metrics(global_vars.model_file, train_loader, val_loader, test_loader, threshold=threshold)

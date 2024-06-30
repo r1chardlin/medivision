@@ -1,10 +1,14 @@
 import torch.nn as nn
 import torch.nn.functional as F
 
-# v1 (version 1)
+# name model class intended for use as ConvNet
+
+# v2 (version 2)
 class ConvNet(nn.Module):
     def __init__(self, input_channels=1, hidden_channels=32, output_dim=14):
         super(ConvNet, self).__init__()
+
+        self.name = "v2"
 
         # 1024 * 1024 -> 1032 * 1032 (padding) -> 344 * 344 (convolution w/ stride=3) -> 86 * 86 (max pool w/ kernel_size=4)
         self.conv1 = nn.Conv2d(input_channels, hidden_channels, kernel_size=3, stride=3, padding=4, bias=False)
@@ -32,10 +36,12 @@ class ConvNet(nn.Module):
 
         return x
 
-# v0.5
-class OldConvNetV1(nn.Module):
+# v1
+class ConvNetV1(nn.Module):
     def __init__(self, input_channels=1, hidden_channels=32, output_dim=14):
-        super(ConvNet, self).__init__()
+        super(ConvNetV1, self).__init__()
+
+        self.name = "v1"
 
         # 1024 * 1024 -> 1026 * 1026 (padding) -> 1024 * 1024 (convolution) -> 256 * 256 (max pool w/ kernel_size=4)
         self.conv1 = nn.Conv2d(input_channels, hidden_channels, kernel_size=3, stride=1, padding=1, bias=False)
