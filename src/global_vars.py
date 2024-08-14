@@ -2,15 +2,18 @@ import os
 import torch
 from datetime import date, datetime
 
-from model import ConvNet
+from model import ConvNet3 as ConvNet
 
 # hyperparameters
 batch_size = 32
 hidden_channels = 32
-num_epochs = 30
-lr = 1e-1
-mean = 128.93533325195312
-std = 59.14480209350586
+# num_epochs = 30
+num_epochs = 5
+lr = 1e-3
+# mean = 128.93533325195312
+# std = 59.14480209350586
+mean = 0.5056294798851013
+std = 0.23194044828414917
 
 # setting device
 device = None
@@ -33,6 +36,10 @@ model_name = ConvNet().name
 # model_file = os.path.join(model_path, datetime.now().strftime("%m-%d-%Y_%H:%M:%S.pkl"))
 model_file = os.path.join(model_path, f"{date.today()}_{model_name}_{device.type}_{batch_size}_{hidden_channels}_{num_epochs}_{lr:.2e}.pkl")
 csv_file = os.path.join(data_path, "Data_Entry_2017_v2020.csv")
+edited_csv_file = os.path.join(data_path, "edited_data_file.csv")
+train_csv_file = os.path.join(data_path, "train.csv")
+val_csv_file = os.path.join(data_path, "val.csv")
+test_csv_file = os.path.join(data_path, "test.csv")
 train_val_list_file = os.path.join(data_path, "train_val_list.txt")
 train_list_file = os.path.join(data_path, "train_list.txt")
 val_list_file = os.path.join(data_path, "val_list.txt")
