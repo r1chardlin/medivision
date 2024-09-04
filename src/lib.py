@@ -13,7 +13,7 @@ from tqdm import tqdm
 
 import global_vars
 from dataset import NIHDataset
-from model import ConvNet
+from model import ConvNet3 as ConvNet
 
 def split_train_val(train_val_file=global_vars.train_val_list_file, train_file=global_vars.train_list_file, 
                     val_file=global_vars.val_list_file, val_ratio=0.1):
@@ -32,12 +32,74 @@ def split_train_val(train_val_file=global_vars.train_val_list_file, train_file=g
             f.write(img)
     train_val_file.close()
 
-def get_mean_and_std(loader):
+def edit_csv(csv_file=global_vars.csv_file, out_file=global_vars.edited_csv_file):
+    out_file = open(out_file, 'w')
+    out_file.write("Image Index,Atelectasis,Cardiomegaly,Effusion,Infiltration,Mass,Nodule,Pneumonia,\
+                   Pneumothorax,Consolidation,Edema,Emphysema,Fibrosis,Pleural_Thickening,Hernia\n")
+    
+    label_map = {"Atelectasis": 0, "Cardiomegaly": 1, "Effusion": 2, "Infiltration": 3, "Mass": 4, 
+                 "Nodule": 5, "Pneumonia": 6, "Pneumothorax": 7, "Consolidation": 8, "Edema": 9, 
+                 "Emphysema": 10, "Fibrosis": 11, "Pleural_Thickening": 12, "Hernia": 13}
+    
+    with open(csv_file, 'r') as f:
+        skip = True
+        for line in f:
+            if skip:
+                skip = False
+                continue
+            row = line.split(',')
+            img_name = row[0]
+            labels = row[1].split('|')
+            new_labels = ["0"] * 14
+            for label in labels:
+                if label != "No Finding":
+                    new_labels[label_map[label]] = "1"
+            new_labels = ','.join(new_labels)
+            new_line = f"{img_name},{new_labels}\n"
+            out_file.write(new_line)
+    out_file.close()
+
+def split_csv(train_lst=global_vars.train_list_file, val_lst=global_vars.val_list_file, test_lst=global_vars.test_list_file,
+              train_csv=global_vars.train_csv_file, val_csv=global_vars.val_csv_file, test_csv=global_vars.test_csv_file,
+              csv_file=global_vars.edited_csv_file):
+    train_lst = {line.strip() for line in open(train_lst)}
+    val_lst = {line.strip() for line in open(val_lst)}
+    test_lst = {line.strip() for line in open(test_lst)}
+
+    train_csv = open(train_csv, 'w')
+    val_csv = open(val_csv, 'w')
+    test_csv = open(test_csv, 'w')
+    with open(csv_file, 'r') as f:
+        header = True
+        for line in f:
+            if header:
+                train_csv.write(line)
+                val_csv.write(line)
+                test_csv.write(line)
+                header = False
+                continue
+            row = line.split(',')
+            img = row[0]
+            if img in train_lst:
+                train_csv.write(line)
+            elif img in val_lst:
+                val_csv.write(line)
+            elif img in test_lst:
+                test_csv.write(line)
+    train_csv.close()
+    val_csv.close()
+    test_csv.close()
+
+def get_mean_and_std(dataset):
     mean = 0.0
     std = 0.0
     total_samples = 0
 
-    for images, _ in tqdm(loader):
+    data_loader = DataLoader(dataset=dataset,
+                             batch_size=global_vars.batch_size,
+                             shuffle=True)
+
+    for images, _ in tqdm(data_loader):
         batch_samples = images.size(0) # get number of samples in the current batch
         images = images.view(batch_samples, images.size(1), -1) # reshape images to (batch_size, channels, height * width)
         mean += images.mean(2).sum(0) # calculate mean of each image and sum across batches
@@ -76,40 +138,31 @@ def keep_top_k_elements_per_row(tensor, k):
     
     return result
 
-def get_dataset_loaders(transform=transforms.Compose([transforms.Normalize((global_vars.mean,), (global_vars.std,))])):
-    train_set = NIHDataset(csv_file=global_vars.csv_file, 
-                           img_list=global_vars.train_list_file, 
+def get_datasets(transform=transforms.Compose([transforms.Normalize((global_vars.mean,), (global_vars.std,))])):
+    train_set = NIHDataset(csv_file=global_vars.train_csv_file,
                            img_path=global_vars.img_path, 
                            transform=transform)
     
-    val_set = NIHDataset(csv_file=global_vars.csv_file, 
-                           img_list=global_vars.val_list_file, 
+    val_set = NIHDataset(csv_file=global_vars.val_csv_file, 
                            img_path=global_vars.img_path, 
                            transform=transform)
     
-    test_set = NIHDataset(csv_file=global_vars.csv_file, 
-                          img_list=global_vars.test_list_file, 
+    test_set = NIHDataset(csv_file=global_vars.test_csv_file, 
                           img_path=global_vars.img_path, 
                           transform=transform)
+
+    return train_set, val_set, test_set
+
+def train_model(train_set, model, num_epochs, lr, weighted=False, print_freq=1):
+    # optimizer = optim.SGD(model.parameters(), lr=lr)  # create an SGD optimizer for the model parameters
+    optimizer = optim.Adam(model.parameters(), lr=lr)
+    # pos_weight = torch.tensor(20, device=global_vars.device)
+    pos_weight = torch.tensor(21.40322216057374, device=global_vars.device)
 
     train_loader = DataLoader(dataset=train_set,
                               batch_size=global_vars.batch_size,
                               shuffle=True)
     
-    val_loader = DataLoader(dataset=val_set,
-                              batch_size=global_vars.batch_size,
-                              shuffle=True)
-
-    test_loader = DataLoader(dataset=test_set,
-                             batch_size=global_vars.batch_size,
-                             shuffle=True)
-
-    return train_loader, val_loader, test_loader
-
-def train_classification_model(train_loader, model, num_epochs, lr, print_freq=1):
-    # optimizer = optim.SGD(model.parameters(), lr=lr)  # create an SGD optimizer for the model parameters
-    optimizer = optim.Adam(model.parameters(), lr=lr)
-    pos_weight = torch.tensor(20)
     for epoch in tqdm(range(num_epochs)):
         # Iterate through the dataloader for each epoch
         loss_acc = 0
@@ -126,24 +179,35 @@ def train_classification_model(train_loader, model, num_epochs, lr, print_freq=1
             
 
             # loss = F.cross_entropy(pred, labels) # for multiclass classification
-            loss = F.binary_cross_entropy_with_logits(pred, labels, pos_weight=pos_weight) # use this instead of F.cross_entropy for multilabel classification
+
+            # loss = F.binary_cross_entropy_with_logits(pred, labels, pos_weight=pos_weight) # use this instead of F.cross_entropy for multilabel classification
+            # loss = F.multilabel_soft_margin_loss(pred, labels)
+            # loss = F.binary_cross_entropy_with_logits(pred, labels)
+            # loss = F.multilabel_soft_margin_loss(pred, labels)
+
+            loss = train_set.weighted_loss(pred, labels) if weighted else F.multilabel_soft_margin_loss(pred, labels)
             loss.backward()  # compute the gradient wrt loss
             optimizer.step()  # performs a step of gradient descent
 
             loss_acc += loss.item()      
 
         if (epoch + 1) % print_freq == 0:
-            print('epoch {} loss {}'.format(epoch+1, loss_acc / global_vars.batch_size))
+            print('epoch {} loss {}'.format(epoch + 1, loss_acc / global_vars.batch_size))
                 
     return model  # return trained model
 
-def test_classification_model(data_loader, model, threshold=0.7):
+def test_model(dataset, model, threshold=0.7):
     accuracy_acc = 0
     precision_acc = 0
     recall_acc = 0
     accuracy_total = 0
     precision_batch_count = 0
     recall_batch_count = 0
+
+    data_loader = DataLoader(dataset=dataset,
+                             batch_size=global_vars.batch_size,
+                             shuffle=True)
+
     for batch_idx, (imgs, labels) in tqdm(enumerate(data_loader)):
         imgs = imgs.to(global_vars.device)
         labels = labels.to(global_vars.device)
@@ -190,8 +254,9 @@ def test_classification_model(data_loader, model, threshold=0.7):
 
     print(precision_acc, precision_batch_count)
     print(recall_acc, recall_batch_count)
-        
+    
     return accuracy_acc / accuracy_total, precision_acc / precision_batch_count, recall_acc / recall_batch_count
+    # return accuracy_acc / accuracy_total, recall_acc / recall_batch_count
 
 def log_test_metrics(model_file, train_loader, val_loader, test_loader, threshold=0.7, log_file=global_vars.metrics_log_file, 
                      train=True, val=True, test=True, print_flag=True):
@@ -206,7 +271,7 @@ def log_test_metrics(model_file, train_loader, val_loader, test_loader, threshol
         f.write(f"{model_name}, threshold: {threshold}\n\n")
     
         if train:
-            train_acc, train_precision, train_recall = test_classification_model(train_loader, model, threshold)
+            train_acc, train_precision, train_recall = test_model(train_loader, model, threshold)
 
             f.write(f"train accuracy: {train_acc}\n")
             f.write(f"train precision: {train_precision}\n")
@@ -218,7 +283,8 @@ def log_test_metrics(model_file, train_loader, val_loader, test_loader, threshol
                 print(f"train recall: {train_recall}\n")
 
         if val:
-            val_acc, val_precision, val_recall = test_classification_model(val_loader, model, threshold)
+            val_acc, val_precision, val_recall = test_model(val_loader, model, threshold)
+            # val_acc, val_recall = test_classification_model(val_loader, model, threshold)
 
             f.write(f"validation accuracy: {val_acc}\n")
             f.write(f"validation precision: {val_precision}\n")
@@ -230,7 +296,7 @@ def log_test_metrics(model_file, train_loader, val_loader, test_loader, threshol
                 print(f"validation recall: {val_recall}\n")
 
         if test:
-            test_acc, test_precision, test_recall = test_classification_model(test_loader, model, threshold)
+            test_acc, test_precision, test_recall = test_model(test_loader, model, threshold)
 
             f.write(f"test accuracy: {test_acc}\n")
             f.write(f"test precision: {test_precision}\n")
@@ -243,14 +309,16 @@ def log_test_metrics(model_file, train_loader, val_loader, test_loader, threshol
 
         f.write('\n')
 
-def train_and_test_model(hidden_channels, num_epochs, lr, threshold=0.7):
-    train_loader, val_loader, test_loader = get_dataset_loaders()
+def train_and_test_model(hidden_channels, num_epochs, lr, weighted=True, threshold=0.7, model=None):
+    train_set, val_set, test_set = get_datasets()
 
-    conv_model = ConvNet(input_channels=1, hidden_channels=hidden_channels)
-    conv_model = conv_model.to(global_vars.device)
-    print('the number of parameters:', sum(parameter.view(-1).size()[0] for parameter in conv_model.parameters()))
+    if not model:
+        model = ConvNet(input_channels=1, hidden_channels=hidden_channels)
+    model = model.to(global_vars.device)
+    print('number of parameters:', sum(parameter.view(-1).size()[0] for parameter in model.parameters()))
 
-    conv_model = train_classification_model(train_loader, conv_model, num_epochs=num_epochs, lr=lr)
-    torch.save(conv_model, global_vars.model_file)
+    model = train_model(train_set, model, weighted=weighted, num_epochs=num_epochs, lr=lr)
+    # conv_model = train_classification_model(val_loader, conv_model, num_epochs=num_epochs, lr=lr) # TODO: delete this line
+    torch.save(model, global_vars.model_file)
     
-    log_test_metrics(global_vars.model_file, train_loader, val_loader, test_loader, threshold=threshold)
+    log_test_metrics(global_vars.model_file, train_set, val_set, test_set, threshold=threshold)
