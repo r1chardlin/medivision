@@ -153,7 +153,6 @@ def get_datasets(transform=transforms.Compose([transforms.Normalize((global_vars
 
     return train_set, val_set, test_set
 
-# TODO: implement weighted loss
 def train_model(train_set, model, num_epochs, lr, weighted=False, print_freq=1):
     # optimizer = optim.SGD(model.parameters(), lr=lr)  # create an SGD optimizer for the model parameters
     optimizer = optim.Adam(model.parameters(), lr=lr)
